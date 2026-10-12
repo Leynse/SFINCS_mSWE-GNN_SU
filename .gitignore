@@ -1,0 +1,22 @@
+# Python and notebooks
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+.env
+.DS_Store
+Thumbs.db
+# External inputs, executable and generated outputs are supplied locally.
+/data/**
+!/data/**/
+!/data/**/.gitkeep
+/exe/**
+!/exe/**/
+!/exe/**/.gitkeep
+/models/**
+!/models/**/
+!/models/**/.gitkeep
+/outputs/**
+!/outputs/**/
+!/outputs/**/.gitkeep

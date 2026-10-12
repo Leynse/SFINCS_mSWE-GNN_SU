@@ -1,0 +1,65 @@
+# REFERENCE ONLY: the original scripts/notebooks do not load this file.
+# Values describe the uploaded source; changing this YAML does not change a run.
+project:
+  original_root: 'C:\Users\Prof. KN Jha\Desktop\SFINCS_mSWE-GNN_v3'
+  rainfall_type: Type A
+  description: Spatially uniform rainfall; temporal forcing from external .prcp files
+paths:
+  raw_dems: data/dem/Raw_DEMs/DEM
+  rainfall: data/rainfall/rainfall_events
+  synthetic_dems: data/Synthetic_DEMs
+  sfincs_executable: exe/SFINCS_v2.3.0_mt_Faber_release_exe/sfincs.exe
+  cases: models/batch_type_A_cases
+  logs: outputs/notebook_logs_type_A
+  npz: outputs/batch_type_A_training_npz
+  split_json: outputs/batch_type_A_training_npz/dataset_split_type_A.json
+  graphs: outputs/batch_type_A_complete_graphs
+terrain_selection:
+  random_seed: 42
+  seen_grid: [64, 64]
+  unseen_grid: [128, 128]
+  seen_base_selection: 20
+  seen_relief_groups: 4
+  selected_per_relief_group: 5
+  unseen_base_selection: all available 128x128 DEMs
+  seen_5m_sloped_selection: first 5 selected seen DEMs
+  seen_10m_sloped_selection: next 5 selected seen DEMs
+  unseen_5m_sloped_selection: first 3 unseen DEMs
+  unseen_10m_sloped_selection: next 3 unseen DEMs
+  added_ramp_relief_m: [5.0, 10.0]
+  direction_range_deg: [0, 360]
+simulation:
+  reference_time: '20200101 000000'
+  start_time: '20200101 000000'
+  stop_time: '20200102 210000'
+  output_interval_seconds: 1800
+  history_interval_seconds: 1800
+  maximum_output_interval_seconds: 10800
+  epsg: 32643
+  alpha: 0.5
+  theta: 1.0
+  wet_dry_threshold_m: 0.01
+  manning: 0.04
+  infiltration: 0.0
+  initial_water_level_setting: -999.0
+  input_format: asc
+  output_format: net
+splits:
+  rule: Match RP100 first, then RP010, otherwise use domain_role
+  train: seen DEMs with rainfall filenames containing neither RP010 nor RP100
+  validation: seen DEMs with RP010 rainfall
+  test_unseen_rainfall: seen DEMs with RP100 rainfall
+  test_unseen_domain: unseen DEMs with non-RP100 rainfall, including RP010
+  test_unseen_domain_and_rainfall: unseen DEMs with RP100 rainfall
+graphs:
+  neighbours: 4
+  edges: bidirectional
+  levels: [fine, medium, coarse]
+  pooling: repeated 2x2 mean pooling
+  grid_dimension_multiple: 4
+temporal_samples:
+  previous_steps: 3
+  prediction_horizon: 6
+  input: ['h(t-2)', 'h(t-1)', 'h(t)', 'P(t)']
+  targets: ['h(t+1)', 'h(t+2)', 'h(t+3)', 'h(t+4)', 'h(t+5)', 'h(t+6)']
+  rainfall_sequence: ['P(t)', 'P(t+1)', 'P(t+2)', 'P(t+3)', 'P(t+4)', 'P(t+5)']

@@ -1,0 +1,9 @@
+# Preserve original uploaded source bytes, including line endings.
+*.py -text
+*.ipynb -text
+# Normalize newly added documentation and configuration.
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf

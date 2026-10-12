@@ -1,0 +1,21 @@
+# Setup template inferred from imports, not a lockfile of the original environment.
+# Notebook metadata records Python 3.10.20. Package versions were not supplied.
+name: sfincs-uniform-dataset
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - pandas
+  - matplotlib
+  - xarray
+  - netcdf4
+  - h5netcdf
+  - jupyterlab
+  - ipykernel
+  - tqdm
+  - pip:
+      - hydromt-sfincs
+      - torch
+      - torch-geometric

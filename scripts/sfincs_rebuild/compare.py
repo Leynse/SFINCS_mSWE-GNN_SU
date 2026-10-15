@@ -260,3 +260,73 @@ def plot_case(case_row, project_root, model_root, variants=VARIANTS, threshold=F
     plt.show()
 
     return fig
+
+
+# Summary figure: fixed colour per variant (reference grey, then categorical slots 1 and 2).
+VARIANT_COLORS = {"regular_100m": "#737370", "subgrid_200m": "#2a78d6", "subgrid_400m": "#eb6834"}
+VARIANT_LABELS = {"regular_100m": "regular 100 m", "subgrid_200m": "subgrid 200 m", "subgrid_400m": "subgrid 400 m"}
+SPLIT_LABELS = {
+    "test_unseen_rainfall": "unseen\nrainfall",
+    "test_unseen_domain": "unseen\ndomain",
+    "test_unseen_domain_and_rainfall": "unseen domain\n+ rainfall",
+}
+
+
+def plot_summary(comparison, out_png=None, seed=0):
+    """
+    One summary figure: per split, the per-case distribution (dots) and median (bar) of
+    (a) hmax RMSE, (b) flood-extent CSI, (c) zsmax RMSE for the subgrid variants, and (d) SFINCS runtime
+    for all variants.
+    """
+    ok = comparison[comparison["status"] == "ok"]
+    rng = np.random.default_rng(seed)
+    subgrid_variants = [v for v in VARIANTS if v != REFERENCE]
+
+    panels = [
+        ("rmse_hmax_m", 100.0, "RMSE of max. depth [cm]", "a  Maximum water depth", subgrid_variants),
+        ("csi", 1.0, "CSI of flood extent (h > 5 cm) [-]", "b  Flood extent", subgrid_variants),
+        ("rmse_zsmax_m", 100.0, "RMSE of max. water level [cm]", "c  Maximum water level", subgrid_variants),
+        ("runtime_s", 1.0, "SFINCS runtime [s]", "d  Runtime", list(VARIANTS)),
+    ]
+
+    fig, axes = plt.subplots(1, 4, figsize=(15, 4.2), constrained_layout=True)
+
+    for axis, (column, scale, ylabel, title, variants) in zip(axes, panels):
+        width = 0.8 / len(variants)
+        for i_split, split in enumerate(SPLIT_LABELS):
+            for i_var, variant in enumerate(variants):
+                values = ok.loc[(ok["split"] == split) & (ok["variant"] == variant), column].to_numpy() * scale
+                if values.size == 0:
+                    continue
+                x_center = i_split + (i_var - (len(variants) - 1) / 2) * width
+                jitter = rng.uniform(-0.3, 0.3, values.size) * width
+                axis.scatter(x_center + jitter, values, s=12, color=VARIANT_COLORS[variant], alpha=0.55,
+                             linewidths=0, zorder=2)
+                axis.hlines(np.median(values), x_center - 0.4 * width, x_center + 0.4 * width,
+                            color="#1f1f1e", linewidth=2, zorder=3)
+
+        axis.set_xticks(range(len(SPLIT_LABELS)))
+        axis.set_xticklabels(SPLIT_LABELS.values(), fontsize=9)
+        axis.set_ylabel(ylabel)
+        axis.set_title(title, loc="left", fontsize=11, fontweight="bold")
+        axis.grid(axis="y", color="#e4e3df", linewidth=0.8, zorder=0)
+        axis.set_axisbelow(True)
+        for side in ("top", "right"):
+            axis.spines[side].set_visible(False)
+        if column == "csi":
+            axis.set_ylim(0.6, 1.01)  # Dots, not bars: a non-zero baseline keeps the 0.7-1.0 spread readable.
+        else:
+            axis.set_ylim(bottom=0)
+
+    handles = [plt.Line2D([], [], marker="o", linestyle="", markersize=7, color=VARIANT_COLORS[v],
+                          label=VARIANT_LABELS[v]) for v in VARIANTS]
+    handles.append(plt.Line2D([], [], color="#1f1f1e", linewidth=2, label="median"))
+    fig.legend(handles=handles, loc="outside lower center", ncol=len(handles), frameon=False)
+    fig.suptitle("Subgrid SFINCS (25 m subgrid pixels) vs regular 100 m, per test case", fontsize=12)
+
+    if out_png is not None:
+        Path(out_png).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_png, dpi=200, bbox_inches="tight")
+    plt.show()
+
+    return fig

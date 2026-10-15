@@ -1,5 +1,6 @@
 """
-Compare the maximum water depth of the rebuilt SFINCS runs against the regular 100 m reference.
+Compare the maximum water depth and maximum water level of the rebuilt SFINCS runs against the
+regular 100 m reference.
 
 Only zsmax is downscaled: for every variant, the maximum water level over the whole simulation
 (zsmax, maximum over all dtmaxout windows) is mapped onto the 100 m DEM,
@@ -13,6 +14,10 @@ Cells that are never wet have zsmax = NaN in the regular output and get depth 0.
 Per case and variant the metrics are computed against regular_100m: RMSE / MAE / bias of hmax,
 error in the domain-maximum depth, flood extent statistics (CSI, hit rate, false alarm ratio) at
 a depth threshold, stored volume of the hmax map, rainfall volume and SFINCS runtime.
+
+zsmax itself is compared on the same 100 m grid (each coarse cell's zsmax applied to its block), but
+only in cells flooded in the reference (hmax_ref > threshold): elsewhere the regular zsmax is NaN
+(never wet) and a water level has no meaning.
 """
 
 from pathlib import Path
@@ -44,27 +49,39 @@ def read_run(case_dir):
     return zsmax, rain_depth, runtime
 
 
-def downscale_zsmax(zsmax, dem_grid):
-    """Map a (coarse) zsmax grid onto the 100 m DEM and return the maximum water depth there."""
+def zsmax_to_dem_grid(zsmax, dem_grid):
+    """Map a (coarse) zsmax grid onto the 100 m DEM grid: each cell's value fills its block of DEM cells."""
 
     factor_y = dem_grid.shape[0] // zsmax.shape[0]
     factor_x = dem_grid.shape[1] // zsmax.shape[1]
     if (zsmax.shape[0] * factor_y, zsmax.shape[1] * factor_x) != dem_grid.shape:
         raise ValueError(f"zsmax {zsmax.shape} does not tile the DEM {dem_grid.shape}")
 
-    zsmax_fine = np.repeat(np.repeat(zsmax, factor_y, axis=0), factor_x, axis=1)  # Each cell -> its block of DEM cells.
-    hmax = zsmax_fine - dem_grid
+    return np.repeat(np.repeat(zsmax, factor_y, axis=0), factor_x, axis=1)
+
+
+def downscale_zsmax(zsmax, dem_grid):
+    """Map a (coarse) zsmax grid onto the 100 m DEM and return the maximum water depth there."""
+
+    hmax = zsmax_to_dem_grid(zsmax, dem_grid) - dem_grid
     return np.where(np.isfinite(hmax), np.maximum(hmax, 0.0), 0.0)
 
 
-def load_hmax(case_row, variant, project_root, model_root):
-    """Return the 100 m maximum-depth map, rainfall depth, runtime and cell size for one run."""
-
+def load_run(case_row, variant, project_root, model_root):
+    """
+    Return a dict with the 100 m maximum-depth map (hmax), zsmax on the 100 m grid (NaN where never wet),
+    rainfall depth, runtime and cell size for one run.
+    """
     dem_grid, x_coords, _ = read_dem_file(Path(project_root) / case_row["dem_path"])
     zsmax, rain_depth, runtime = read_run(Path(model_root) / variant / case_row["case_name"])
-    cell_size = float(x_coords[1] - x_coords[0])
 
-    return downscale_zsmax(zsmax, dem_grid), rain_depth, runtime, cell_size
+    return {
+        "hmax": downscale_zsmax(zsmax, dem_grid),
+        "zsmax": zsmax_to_dem_grid(zsmax, dem_grid),
+        "rain_depth": rain_depth,
+        "runtime": runtime,
+        "cell_size": float(x_coords[1] - x_coords[0]),
+    }
 
 
 # ============================================================
@@ -100,15 +117,36 @@ def hmax_metrics(hmax_ref, hmax, cell_size, threshold=FLOOD_THRESHOLD):
     }
 
 
+def zsmax_metrics(zsmax_ref, zsmax, hmax_ref, threshold=FLOOD_THRESHOLD):
+    """Error statistics of zsmax against zsmax_ref in the cells flooded in the reference."""
+
+    flooded_ref = hmax_ref > threshold
+    difference = (zsmax - zsmax_ref)[flooded_ref & np.isfinite(zsmax) & np.isfinite(zsmax_ref)]
+
+    if difference.size == 0:
+        return {"rmse_zsmax_m": np.nan, "mae_zsmax_m": np.nan, "bias_zsmax_m": np.nan,
+                "p95_abs_zsmax_m": np.nan, "max_abs_zsmax_m": np.nan, "n_cells_zsmax": 0}
+
+    return {
+        "rmse_zsmax_m": float(np.sqrt(np.mean(difference ** 2))),
+        "mae_zsmax_m": float(np.mean(np.abs(difference))),
+        "bias_zsmax_m": float(np.mean(difference)),
+        "p95_abs_zsmax_m": float(np.percentile(np.abs(difference), 95)),
+        "max_abs_zsmax_m": float(np.max(np.abs(difference))),
+        "n_cells_zsmax": int(difference.size),
+    }
+
+
 def compare_case(case_row, project_root, model_root, variants=VARIANTS, threshold=FLOOD_THRESHOLD):
     """Compare every variant of one case against the reference; returns one row per variant."""
 
-    hmax_ref, _, runtime_ref, cell_size = load_hmax(case_row, REFERENCE, project_root, model_root)
+    ref = load_run(case_row, REFERENCE, project_root, model_root)
+    hmax_ref, cell_size = ref["hmax"], ref["cell_size"]
     domain_area = hmax_ref.size * cell_size ** 2
 
     rows = []
     for variant in variants:
-        hmax, rain_depth, runtime, _ = load_hmax(case_row, variant, project_root, model_root)
+        run = ref if variant == REFERENCE else load_run(case_row, variant, project_root, model_root)
         row = {
             "case_name": case_row["case_name"],
             "split": case_row["split"],
@@ -117,12 +155,13 @@ def compare_case(case_row, project_root, model_root, variants=VARIANTS, threshol
             "grid": f"{case_row['nx']}x{case_row['ny']}",
             "variant": variant,
         }
-        row.update(hmax_metrics(hmax_ref, hmax, cell_size, threshold))
+        row.update(hmax_metrics(hmax_ref, run["hmax"], cell_size, threshold))
+        row.update(zsmax_metrics(ref["zsmax"], run["zsmax"], hmax_ref, threshold))
         row.update({
             # Rainfall volume; volume_hmax / rain_volume >= ~1 because hmax is the maximum over time.
-            "rain_volume_m3": rain_depth * domain_area,
-            "runtime_s": runtime,
-            "runtime_ref_s": runtime_ref,
+            "rain_volume_m3": run["rain_depth"] * domain_area,
+            "runtime_s": run["runtime"],
+            "runtime_ref_s": ref["runtime"],
         })
         rows.append(row)
 
@@ -157,7 +196,7 @@ def summarize(comparison, by=("split", "variant")):
     """Mean metrics per group (default: split x variant)."""
 
     columns = ["rmse_hmax_m", "mae_hmax_m", "bias_hmax_m", "max_hmax_error_m", "csi", "hit_rate",
-               "false_alarm_ratio", "runtime_s"]
+               "false_alarm_ratio", "rmse_zsmax_m", "mae_zsmax_m", "bias_zsmax_m", "p95_abs_zsmax_m", "runtime_s"]
     ok = comparison[comparison["status"] == "ok"]
     summary = ok.groupby(list(by))[columns].mean()
     summary["n_cases"] = ok.groupby(list(by)).size()
@@ -168,25 +207,46 @@ def summarize(comparison, by=("split", "variant")):
 # Plots
 # ============================================================
 
-def plot_case(case_row, project_root, model_root, variants=VARIANTS, threshold=FLOOD_THRESHOLD):
-    """Maximum-depth maps per variant (top) and their difference with the reference (bottom)."""
+def plot_case(case_row, project_root, model_root, variants=VARIANTS, threshold=FLOOD_THRESHOLD,
+              quantity="hmax"):
+    """
+    Maps per variant (top) and their difference with the reference (bottom).
 
-    hmax_ref = load_hmax(case_row, REFERENCE, project_root, model_root)[0]
-    maps = {variant: load_hmax(case_row, variant, project_root, model_root)[0] for variant in variants}
+    quantity: "hmax" (maximum depth) or "zsmax" (maximum water level; shown only in cells flooded in the
+    reference, as in zsmax_metrics).
+    """
+    runs = {variant: load_run(case_row, variant, project_root, model_root) for variant in variants}
+    if REFERENCE not in runs:
+        runs[REFERENCE] = load_run(case_row, REFERENCE, project_root, model_root)
+    flooded_ref = runs[REFERENCE]["hmax"] > threshold
 
-    vmax_depth = max(float(hmax.max()) for hmax in maps.values())
-    vmax_diff = max(float(np.abs(hmax - hmax_ref).max()) for hmax in maps.values()) or 1e-3
+    if quantity == "hmax":
+        maps = {variant: np.ma.masked_where(run["hmax"] <= threshold, run["hmax"]) for variant, run in runs.items()}
+        diffs = {variant: run["hmax"] - runs[REFERENCE]["hmax"] for variant, run in runs.items()}
+        cmap, label = "Blues", "Maximum water depth [m]"
+    elif quantity == "zsmax":
+        maps = {variant: np.ma.masked_where(~flooded_ref, run["zsmax"]) for variant, run in runs.items()}
+        diffs = {variant: np.ma.masked_where(~flooded_ref, run["zsmax"] - runs[REFERENCE]["zsmax"])
+                 for variant, run in runs.items()}
+        cmap, label = "viridis", "Maximum water level [m]"
+    else:
+        raise ValueError(f"quantity must be 'hmax' or 'zsmax', not {quantity!r}")
+
+    vmin = min(float(maps[variant].min()) for variant in variants)
+    vmax = max(float(maps[variant].max()) for variant in variants)
+    # Colour limit from the 99th percentile, so a few edge cells (a coarse cell spanning two ponds) don't hide the rest.
+    vmax_diff = max(float(np.percentile(np.abs(np.ma.asarray(diffs[variant]).compressed()), 99))
+                    for variant in variants) or 1e-3
 
     fig, axes = plt.subplots(2, len(variants), figsize=(3.6 * len(variants), 7), constrained_layout=True,
                              squeeze=False)
 
     for column, variant in enumerate(variants):
-        hmax = maps[variant]
-        image = axes[0, column].imshow(np.ma.masked_where(hmax <= threshold, hmax), origin="lower",
-                                       cmap="Blues", vmin=0, vmax=vmax_depth)
-        axes[0, column].set_title(f"{variant}: hmax", fontsize=9)
+        image = axes[0, column].imshow(maps[variant], origin="lower", cmap=cmap,
+                                       vmin=0 if quantity == "hmax" else vmin, vmax=vmax)
+        axes[0, column].set_title(f"{variant}: {quantity}", fontsize=9)
 
-        diff = axes[1, column].imshow(hmax - hmax_ref, origin="lower", cmap="RdBu_r",
+        diff = axes[1, column].imshow(diffs[variant], origin="lower", cmap="RdBu_r",
                                       vmin=-vmax_diff, vmax=vmax_diff)
         axes[1, column].set_title(f"{variant} - {REFERENCE}", fontsize=9)
 
@@ -194,7 +254,7 @@ def plot_case(case_row, project_root, model_root, variants=VARIANTS, threshold=F
         axis.set_xticks([])
         axis.set_yticks([])
 
-    fig.colorbar(image, ax=axes[0, :].tolist(), label="Maximum water depth [m]")
+    fig.colorbar(image, ax=axes[0, :].tolist(), label=label)
     fig.colorbar(diff, ax=axes[1, :].tolist(), label="Difference [m]")
     fig.suptitle(f"{case_row['case_name']} ({case_row['split']})")
     plt.show()

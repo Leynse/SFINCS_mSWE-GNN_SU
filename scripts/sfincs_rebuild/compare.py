@@ -31,7 +31,7 @@ from scripts.sfincs_dataset_creation.dem import read_dem_file
 
 REFERENCE = "regular_100m"
 VARIANTS = ("regular_100m", "subgrid_200m", "subgrid_400m")
-FLOOD_THRESHOLD = 0.05  # Depth [m] above which a cell counts as flooded for the extent statistics.
+FLOOD_THRESHOLD = 0.01  # Depth [m] above which a cell counts as flooded for the extent statistics.
 
 
 # ============================================================
